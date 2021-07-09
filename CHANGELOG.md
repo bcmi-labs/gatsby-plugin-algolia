@@ -2,6 +2,37 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+<a name="0.21.0"></a>
+# [0.21.0](https://github.com/algolia/gatsby-plugin-algolia/compare/v0.20.1...v0.21.0) (2021-07-08)
+
+
+### Bug Fixes
+
+* **settings:** forward rules and synonyms to index to write ([ad7e076](https://github.com/algolia/gatsby-plugin-algolia/commit/ad7e076))
+
+
+
+<a name="0.20.1"></a>
+## [0.20.1](https://github.com/algolia/gatsby-plugin-algolia/compare/v0.20.0...v0.20.1) (2021-05-31)
+
+
+### Bug Fixes
+
+* **continueOnError:** correct error usage ([8e8c0a1](https://github.com/algolia/gatsby-plugin-algolia/commit/8e8c0a1))
+
+
+
+<a name="0.20.0"></a>
+# [0.20.0](https://github.com/algolia/gatsby-plugin-algolia/compare/v0.19.0...v0.20.0) (2021-05-18)
+
+
+### Features
+
+* add dryRun option ([#134](https://github.com/algolia/gatsby-plugin-algolia/issues/134)) ([57239ff](https://github.com/algolia/gatsby-plugin-algolia/commit/57239ff))
+* **core:** Migrate to algoliasearch@4.x ([#135](https://github.com/algolia/gatsby-plugin-algolia/issues/135)) ([bfa7180](https://github.com/algolia/gatsby-plugin-algolia/commit/bfa7180))
+
+
+
 <a name="0.19.0"></a>
 # [0.19.0](https://github.com/algolia/gatsby-plugin-algolia/compare/v0.18.2...v0.19.0) (2021-04-14)
 

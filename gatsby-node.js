@@ -8,21 +8,28 @@ const deepEqual = require('deep-equal');
  * @param {AlgoliaIndex} index eg. client.initIndex('your_index_name');
  * @param {Array<String>} attributesToRetrieve eg. ['modified', 'slug']
  */
-function fetchAlgoliaObjects(index, attributesToRetrieve = ['modified']) {
-  return new Promise((resolve, reject) => {
-    const browser = index.browseAll('', { attributesToRetrieve });
-    const hits = {};
+function fetchAlgoliaObjects(
+  index,
+  attributesToRetrieve = ['modified'],
+  reporter
+) {
+  const hits = {};
 
-    browser.on('result', content => {
-      if (Array.isArray(content.hits)) {
-        content.hits.forEach(hit => {
-          hits[hit.objectID] = hit;
-        });
-      }
-    });
-    browser.on('end', () => resolve(hits));
-    browser.on('error', err => reject(err));
-  });
+  return index
+    .browseObjects({
+      batch: batch => {
+        if (Array.isArray(batch)) {
+          batch.forEach(hit => {
+            hits[hit.objectID] = hit;
+          });
+        }
+      },
+      attributesToRetrieve,
+    })
+    .then(() => hits)
+    .catch(err =>
+      reporter.panicOnBuild('failed while getting indexed objects', err)
+    );
 }
 
 exports.onPostBuild = async function ({ graphql, reporter }, config) {
@@ -32,6 +39,7 @@ exports.onPostBuild = async function ({ graphql, reporter }, config) {
     queries,
     concurrentQueries = true,
     skipIndexing = false,
+    dryRun = false,
     continueOnFailure = false,
   } = config;
 
@@ -44,7 +52,22 @@ exports.onPostBuild = async function ({ graphql, reporter }, config) {
     return;
   }
 
-  const client = algoliasearch(appId, apiKey, { timeout: 30_000 });
+  if (dryRun === true) {
+    console.log(
+      '\x1b[33m%s\x1b[0m',
+      '==== THIS IS A DRY RUN ====================\n' +
+        '- No records will be pushed to your index\n' +
+        '- No settings will be updated on your index'
+    );
+  }
+
+  const client = algoliasearch(appId, apiKey, {
+    timeouts: {
+      connect: 1,
+      read: 30,
+      write: 30,
+    },
+  });
 
   activity.setStatus(`${queries.length} queries to index`);
 
@@ -60,6 +83,7 @@ exports.onPostBuild = async function ({ graphql, reporter }, config) {
         graphql,
         config,
         reporter,
+        dryRun,
       });
 
       if (concurrentQueries) {
@@ -74,7 +98,7 @@ exports.onPostBuild = async function ({ graphql, reporter }, config) {
     await Promise.all(jobs);
   } catch (err) {
     if (continueOnFailure) {
-      report.warn('failed to index to Algolia');
+      reporter.warn('failed to index to Algolia');
       console.error(err);
     } else {
       activity.panicOnBuild('failed to index to Algolia', err);
@@ -104,11 +128,20 @@ function groupQueriesByIndex(queries = [], config) {
 
 /**
  * Run all queries for a given index, then make any updates / removals necessary
+ * @param {string} indexName
+ * @param {string[]} queries
+ * @param {object} options
+ * @param {import('algoliasearch').SearchClient} options.client
+ * @param {any} options.activity
+ * @param {any} options.graphql
+ * @param {any} options.reporter
+ * @param {any} options.config
+ * @param {boolean=} options.dryRun
  */
 async function runIndexQueries(
   indexName,
   queries = [],
-  { client, activity, graphql, reporter, config }
+  { client, activity, graphql, reporter, config, dryRun }
 ) {
   const {
     settings: mainSettings,
@@ -166,7 +199,8 @@ async function runIndexQueries(
     // get all indexed objects matching all matched fields
     const indexedObjects = await fetchAlgoliaObjects(
       indexToUse,
-      allMatchFields
+      allMatchFields,
+      reporter
     );
 
     // iterate over each query
@@ -242,8 +276,11 @@ async function runIndexQueries(
 
     /* Add changed / new objects */
     const chunkJobs = chunks.map(async function (chunked) {
-      const { taskID } = await indexToUse.addObjects(chunked);
-      return indexToUse.waitTask(taskID);
+      if (dryRun === true) {
+        reporter.info(`Records to add: ${objectsToIndex.length}`);
+      } else {
+        await indexToUse.saveObjects(chunked);
+      }
     });
 
     await Promise.all(chunkJobs);
@@ -256,8 +293,11 @@ async function runIndexQueries(
       `Found ${objectsToRemove.length} stale objects; removing...`
     );
 
-    const { taskID } = await indexToUse.deleteObjects(objectsToRemove);
-    await indexToUse.waitTask(taskID);
+    if (dryRun === true) {
+      reporter.info(`Records to delete: ${objectsToRemove.length}`);
+    } else {
+      await indexToUse.deleteObjects(objectsToRemove).wait();
+    }
   }
 
   // defer to first query for index settings
@@ -272,13 +312,27 @@ async function runIndexQueries(
     reporter,
   });
 
-  const { taskID } = await indexToUse.setSettings(settingsToApply, {
-    forwardToReplicas,
-  });
+  if (dryRun) {
+    console.log('[dry run]: settings', settingsToApply);
+  } else {
+    await indexToUse
+      .setSettings(settingsToApply, {
+        forwardToReplicas,
+      })
+      .wait();
+  }
 
-  await indexToUse.waitTask(taskID);
+  if (dryRun) {
+    console.log('[dry run]: settings', settingsToApply);
+  } else {
+    await indexToUse
+      .setSettings(settingsToApply, {
+        forwardToReplicas,
+      })
+      .wait();
+  }
 
-  if (indexToUse === tempIndex) {
+  if (indexToUse === tempIndex && dryRun === false) {
     await moveIndex(client, indexToUse, index);
   }
 
@@ -293,11 +347,14 @@ async function runIndexQueries(
  * @return {Promise}
  */
 async function moveIndex(client, sourceIndex, targetIndex) {
-  const { taskID } = await client.moveIndex(
-    sourceIndex.indexName,
-    targetIndex.indexName
-  );
-  return targetIndex.waitTask(taskID);
+  // first copy the rules and synonyms to the temporary index, as we don't want
+  // to touch the original index, and there's no way to only move objects and
+  // settings, leaving rules and synonyms in place.
+  await client.copyIndex(targetIndex.indexName, sourceIndex.indexName, {
+    scope: ['rules', 'synonyms'],
+  });
+
+  return client.moveIndex(sourceIndex.indexName, targetIndex.indexName).wait();
 }
 
 /**
@@ -318,6 +375,13 @@ function indexExists(index) {
     });
 }
 
+/**
+ * @param {object} options
+ * @param {import('algoliasearch').SearchIndex} options.index
+ * @param {import('algoliasearch').SearchIndex} options.tempIndex
+ * @param {boolean=} options.enablePartialUpdates
+ * @returns {Promise<import('algoliasearch').SearchIndex>}
+ */
 async function getIndexToUse({ index, tempIndex, enablePartialUpdates }) {
   const mainIndexExists = await indexExists(index);
 
@@ -332,6 +396,15 @@ async function getIndexToUse({ index, tempIndex, enablePartialUpdates }) {
   return index;
 }
 
+/**
+ * @param {object} options
+ * @param {import('@algolia/client-search').Settings} options.settings
+ * @param {import('algoliasearch').SearchIndex} options.index
+ * @param {import('algoliasearch').SearchIndex} options.tempIndex
+ * @param {import('algoliasearch').SearchIndex} options.indexToUse
+ * @param {any} options.reporter
+ * @returns {import('@algolia/client-search').Settings}
+ */
 async function getSettingsToApply({
   settings,
   index,
@@ -423,7 +496,6 @@ function getAllMatchFields(queries, mainMatchFields = []) {
 }
 
 async function createIndex(index) {
-  const { taskID } = await index.setSettings({});
-  await index.waitTask(taskID);
+  await index.setSettings({}).wait();
   return index;
 }
