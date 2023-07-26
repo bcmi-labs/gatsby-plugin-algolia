@@ -8,7 +8,10 @@
     "algolia",
     "gatsby-plugin"
   ],
-  "repository": "bcmi-labs/gatsby-plugin-algolia",
+  "repository": {
+    "type": "git",
+    "url": "git+ssh://github.com/bcmi-labs/gatsby-plugin-algolia"
+  },
   "license": "Apache-2.0",
   "author": "Algolia",
   "description": "A gatsby plugin to push to Algolia based on a certain query",
